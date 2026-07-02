@@ -9,6 +9,52 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentCalendarDate = new Date();
     let selectedDetailDate = null;
     
+    // API Key setup
+    let geminiApiKey = "";
+    const apiKeySettings = document.getElementById('api-key-settings');
+    const apiKeyText = document.getElementById('api-key-text');
+
+    function resolveApiKey() {
+        geminiApiKey = (typeof CONFIG !== 'undefined' && CONFIG.GEMINI_API_KEY) || localStorage.getItem('gemini_api_key') || "";
+        updateApiKeyBadge();
+    }
+
+    function updateApiKeyBadge() {
+        if (!apiKeySettings || !apiKeyText) return;
+        if (geminiApiKey) {
+            apiKeySettings.classList.add('active');
+            apiKeyText.textContent = "Gemini API 연결됨";
+            apiKeySettings.title = "API 키가 활성화되었습니다. 클릭하여 수정할 수 있습니다.";
+        } else {
+            apiKeySettings.classList.remove('active');
+            apiKeyText.textContent = "API 키 설정 필요";
+            apiKeySettings.title = "AI 분석을 사용하려면 클릭하여 API 키를 설정하세요.";
+        }
+    }
+
+    if (apiKeySettings) {
+        apiKeySettings.addEventListener('click', () => {
+            const currentKey = geminiApiKey || "";
+            const newKey = prompt("Google Gemini API 키를 입력해 주세요 (안전하게 로컬 브라우저에만 저장됩니다):", currentKey);
+            if (newKey !== null) {
+                const trimmedKey = newKey.trim();
+                if (trimmedKey) {
+                    localStorage.setItem('gemini_api_key', trimmedKey);
+                    geminiApiKey = trimmedKey;
+                    alert("API 키가 저장되었습니다!");
+                } else {
+                    localStorage.removeItem('gemini_api_key');
+                    geminiApiKey = "";
+                    alert("API 키가 삭제되었습니다. 기본 시뮬레이션 분석 엔진으로 대체됩니다.");
+                }
+                updateApiKeyBadge();
+            }
+        });
+    }
+
+    // Initialize API Key status
+    resolveApiKey();
+    
     // Voice Recognition setup
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
@@ -199,9 +245,38 @@ document.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             
             recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript;
+                let transcript = event.results[0][0].transcript;
                 if (transcript) {
-                    diaryContent.value = (diaryContent.value ? diaryContent.value + ' ' : '') + transcript;
+                    // 1. 말로 하는 문장 부호 키워드 변환
+                    const replacements = {
+                        '마침표': '.',
+                        '쉼표': ',',
+                        '물음표': '?',
+                        '느낌표': '!',
+                        '줄바꿈': '\n',
+                        '줄 바꿈': '\n'
+                    };
+                    
+                    Object.keys(replacements).forEach(key => {
+                        const regex = new RegExp(`\\s*${key}\\s*`, 'g');
+                        transcript = transcript.replace(regex, replacements[key]);
+                    });
+
+                    // 문장 부호 앞 공백 제거
+                    transcript = transcript
+                        .replace(/\s+\./g, '.')
+                        .replace(/\s+,/g, ',')
+                        .replace(/\s+\?/g, '?')
+                        .replace(/\s+!/g, '!');
+
+                    // 2. 문장이 문장 부호나 줄바꿈으로 끝나지 않는 경우 자동으로 마침표(.) 추가
+                    let trimmed = transcript.trim();
+                    if (trimmed && !['.', ',', '?', '!', '\n'].includes(trimmed[trimmed.length - 1])) {
+                        transcript = trimmed + '.';
+                    }
+
+                    // 기존 입력창 내용 뒤에 공백 하나를 두고 덧붙임
+                    diaryContent.value = (diaryContent.value ? diaryContent.value.trim() + ' ' : '') + transcript;
                     charCount.textContent = `${diaryContent.value.length}자`;
                 }
             };
@@ -241,11 +316,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // AI EMOTION ANALYSIS ENGINE (MOCK ENGINE)
     // ----------------------------------------------------
-    btnAnalyze.addEventListener('click', () => {
+    btnAnalyze.addEventListener('click', async () => {
         const text = diaryContent.value.trim();
         if (!text) {
             alert('먼저 일기 내용을 입력해 주세요.');
             return;
+        }
+
+        // API Key check
+        if (!geminiApiKey) {
+            const keyInput = prompt("AI 분석을 수행하려면 Google Gemini API 키가 필요합니다.\nAPI 키를 입력해 주시면 안전하게 브라우저에 보관 후 계속 진행합니다:");
+            if (keyInput && keyInput.trim()) {
+                geminiApiKey = keyInput.trim();
+                localStorage.setItem('gemini_api_key', geminiApiKey);
+                updateApiKeyBadge();
+            } else {
+                alert("API 키가 입력되지 않았습니다. 기본 시뮬레이션 분석 엔진으로 일기를 분석합니다.");
+            }
         }
 
         // Show Loading State in AI Box
@@ -254,9 +341,17 @@ document.addEventListener('DOMContentLoaded', () => {
         aiResponseText.textContent = "AI가 작성하신 일기를 분석하고 감정 흐름을 포착하는 중입니다. 잠시만 기다려 주세요...";
         analysisResultPanel.classList.add('hidden');
 
-        // Simulate API loading network time (1.5 seconds)
-        setTimeout(() => {
-            const analysis = performEmotionAnalysis(text);
+        try {
+            let analysis = null;
+            if (geminiApiKey) {
+                analysis = await performGeminiAnalysis(text);
+            }
+            
+            // Fallback to local dictionary engine if API key was missing or request failed
+            if (!analysis) {
+                analysis = performEmotionAnalysis(text);
+            }
+
             const selectedDate = diaryDateInput.value;
             
             // Save or Update Entry in localStorage
@@ -267,8 +362,90 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Scroll to AI response area smoothly
             document.querySelector('.ai-response-container').scrollIntoView({ behavior: 'smooth' });
-        }, 1500);
+        } catch (e) {
+            console.error("Analysis error, falling back to local engine", e);
+            const analysis = performEmotionAnalysis(text);
+            const selectedDate = diaryDateInput.value;
+            saveOrUpdateEntry(selectedDate, text, selectedWeather, analysis);
+            displayAnalysisResult(analysis);
+            document.querySelector('.ai-response-container').scrollIntoView({ behavior: 'smooth' });
+        }
     });
+
+    async function performGeminiAnalysis(text) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+        
+        const systemInstruction = `당신은 따뜻하고 공감 능력이 뛰어난 AI 감정 분석가이자 마음 챙김 카운셀러입니다. 다음 일기를 읽고 분석하여 정해진 JSON 형식으로만 답변하세요. 다른 설명이나 앞뒤의 서론/결론, 텍스트 없이 오직 순수한 JSON 데이터만 반환해야 합니다.
+
+일기 내용:
+"${text}"
+
+반드시 다음 JSON 형식을 정확하게 지켜서 출력하세요. JSON 마크다운 기호(\`\`\`json) 없이 순수 JSON 중괄호만 출력하세요:
+{
+  "primaryEmotion": "joy | sadness | anger | anxiety | fatigue | calm 중 텍스트를 분석하여 가장 어울리는 대표 감정 단어 하나 선택",
+  "positivity": 0부터 100 사이의 긍정 지수 숫자 (행복할수록 높고 슬프거나 짜증날수록 낮음),
+  "keywords": ["일기 내용에서 추출한 대표 감정 키워드 3~5개"],
+  "aiResponse": "일기 작성자의 마음에 깊이 공감하고 위로와 격려를 건네주는 다정하고 따뜻한 위로의 편지 (존댓말 사용, 200자 내외)",
+  "recommendation": "감정 상태에 맞는 추천 힐링 활동이나 자기 관리 팁 가이드 (100자 내외)"
+}`;
+
+        const payload = {
+            contents: [{
+                parts: [{
+                    text: systemInstruction
+                }]
+            }]
+        };
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const geminiText = data.candidates[0].content.parts[0].text;
+        
+        try {
+            let cleanJsonText = geminiText.trim();
+            if (cleanJsonText.startsWith("```")) {
+                cleanJsonText = cleanJsonText.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+            }
+            
+            const parsed = JSON.parse(cleanJsonText);
+            
+            let emotion = parsed.primaryEmotion.toLowerCase().trim();
+            const validEmotions = ['joy', 'sadness', 'anger', 'anxiety', 'fatigue', 'calm'];
+            if (!validEmotions.includes(emotion)) {
+                const emoMap = {
+                    '행복': 'joy', '기쁨': 'joy',
+                    '슬픔': 'sadness', '우울': 'sadness',
+                    '화': 'anger', '분노': 'anger', '짜증': 'anger',
+                    '불안': 'anxiety', '걱정': 'anxiety',
+                    '무기력': 'fatigue', '피곤': 'fatigue',
+                    '평온': 'calm', '안정': 'calm'
+                };
+                emotion = emoMap[parsed.primaryEmotion] || 'calm';
+            }
+            
+            return {
+                primaryEmotion: emotion,
+                positivity: Number(parsed.positivity) || 50,
+                keywords: Array.isArray(parsed.keywords) ? parsed.keywords : ['일기'],
+                aiResponse: parsed.aiResponse || '일기를 잘 읽었습니다. 힘내세요.',
+                recommendation: parsed.recommendation || '마음 편히 쉬어보세요.'
+            };
+        } catch (parseError) {
+            console.error("Failed to parse Gemini response JSON. Raw text:", geminiText);
+            return null;
+        }
+    }
 
     function performEmotionAnalysis(text) {
         const normalizedText = text.toLowerCase();
