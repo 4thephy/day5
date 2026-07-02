@@ -16,8 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (SpeechRecognition) {
         recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
+        recognition.continuous = false;
+        recognition.interimResults = false;
         recognition.lang = 'ko-KR';
     }
 
@@ -190,49 +190,32 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             isListening = true;
-            btnVoiceInput.innerHTML = `<i data-lucide="mic-off"></i><span>음성인식 중단</span>`;
+            btnVoiceInput.innerHTML = `<i data-lucide="mic-off"></i><span>음성 인식 중...</span>`;
             btnVoiceInput.classList.add('btn-danger');
             btnVoiceInput.classList.remove('btn-secondary');
             
             voiceStatus.classList.remove('hidden');
-            voiceStatusText.textContent = "마이크에 대고 이야기해 주세요. 음성을 듣고 있습니다...";
+            voiceStatusText.textContent = "마이크가 켜졌습니다. 말씀해 주세요...";
             lucide.createIcons();
             
-            let tempContent = diaryContent.value;
-            
             recognition.onresult = (event) => {
-                let interimTranscript = '';
-                let finalTranscript = '';
-                
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
-                    }
-                }
-                
-                if (finalTranscript) {
-                    tempContent = (tempContent ? tempContent + ' ' : '') + finalTranscript;
-                    diaryContent.value = tempContent;
+                const transcript = event.results[0][0].transcript;
+                if (transcript) {
+                    diaryContent.value = (diaryContent.value ? diaryContent.value + ' ' : '') + transcript;
                     charCount.textContent = `${diaryContent.value.length}자`;
                 }
-                
-                voiceStatusText.textContent = interimTranscript || "듣고 있습니다...";
             };
             
             recognition.onerror = (event) => {
                 console.error('Speech recognition error', event.error);
                 if (event.error === 'not-allowed') {
                     alert('마이크 사용 권한이 거부되었습니다. 주소창 왼쪽의 권한 설정을 확인해 주세요.');
-                    stopVoiceRecognition();
                 }
+                stopVoiceRecognition();
             };
             
             recognition.onend = () => {
-                if (isListening) {
-                    recognition.start(); // Auto-restart to make it continuous
-                }
+                stopVoiceRecognition();
             };
             
             recognition.start();
@@ -244,6 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function stopVoiceRecognition() {
         if (!recognition) return;
+        if (!isListening) return;
         isListening = false;
         recognition.stop();
         
