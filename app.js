@@ -179,6 +179,27 @@ document.addEventListener('DOMContentLoaded', () => {
     // Lucide Icons initialization
     lucide.createIcons();
 
+    // 이전 일기 및 AI 답변 복원
+    const savedLastContent = localStorage.getItem('mindflow_last_content');
+    const savedLastAiResponse = localStorage.getItem('mindflow_last_ai_response');
+
+    if (savedLastContent) {
+        diaryContent.value = savedLastContent;
+        charCount.textContent = `${savedLastContent.length}자`;
+    }
+    
+    if (savedLastAiResponse) {
+        aiResponseText.textContent = savedLastAiResponse;
+        aiResponseText.classList.remove('loading');
+        
+        // 오늘 날짜 일기의 리포트와 내용이 동일하다면 결과 리포트 패널도 표시
+        const activeDate = diaryDateInput.value;
+        const matchingEntry = entries.find(e => e.date === activeDate);
+        if (matchingEntry && matchingEntry.content === savedLastContent) {
+            displayAnalysisResult(matchingEntry);
+        }
+    }
+
     // ----------------------------------------------------
     // TAB NAVIGATION
     // ----------------------------------------------------
@@ -654,7 +675,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function displayAnalysisResult(analysis) {
         // Remove loading state from AI text box
         aiResponseText.classList.remove('loading');
-        aiResponseText.innerHTML = analysis.aiResponse;
+        aiResponseText.textContent = analysis.aiResponse;
+
+        // 분석 성공 시점의 일기 내용과 AI 답변을 로컬 스토리지에 보관
+        localStorage.setItem('mindflow_last_content', diaryContent.value.trim());
+        localStorage.setItem('mindflow_last_ai_response', analysis.aiResponse);
 
         // Populate report fields
         resPrimaryEmotion.textContent = emotionsMeta[analysis.primaryEmotion].label;
