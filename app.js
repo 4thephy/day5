@@ -14,7 +14,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKeySettings = document.getElementById('api-key-settings');
     const apiKeyText = document.getElementById('api-key-text');
 
-    function resolveApiKey() {
+    async function resolveApiKey() {
+        // 1. .env 파일 로드 시도
+        try {
+            const response = await fetch('.env');
+            if (response.ok) {
+                const text = await response.text();
+                const lines = text.split('\n');
+                for (let line of lines) {
+                    const parts = line.split('=');
+                    if (parts[0] && parts[0].trim() === 'GEMINI_API_KEY') {
+                        if (parts[1]) {
+                            // 따옴표 제거 및 클리닝
+                            geminiApiKey = parts[1].trim().replace(/^['"]|['"]$/g, '');
+                            updateApiKeyBadge();
+                            return;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.log("No .env file found or failed to fetch, checking CONFIG/localStorage.");
+        }
+
+        // 2. CONFIG 또는 localStorage 폴백
         geminiApiKey = (typeof CONFIG !== 'undefined' && CONFIG.GEMINI_API_KEY) || localStorage.getItem('gemini_api_key') || "";
         updateApiKeyBadge();
     }
@@ -373,21 +396,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     async function performGeminiAnalysis(text) {
+        // 최신 Flash 모델인 gemini-1.5-flash 모델 엔드포인트 호출
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
         
-        const systemInstruction = `당신은 따뜻하고 공감 능력이 뛰어난 AI 감정 분석가이자 마음 챙김 카운셀러입니다. 다음 일기를 읽고 분석하여 정해진 JSON 형식으로만 답변하세요. 다른 설명이나 앞뒤의 서론/결론, 텍스트 없이 오직 순수한 JSON 데이터만 반환해야 합니다.
+        const systemInstruction = `너는 심리 상담가야. 사용자가 작성한 일기 내용을 읽고, 사용자의 감정을 한 단어(예: 기쁨, 슬픔, 분노, 불안, 평온)로 요약해 줘. 그리고 그 감정에 공감해 주고 따뜻한 응원의 메시지를 2~3 문장으로 작성해 줘. 답변 형식은 반드시 '감정: [요약된 감정]\n\n[응원메시지]'와 같이 줄바꿈을 포함해서 보내줘
 
-일기 내용:
-"${text}"
-
-반드시 다음 JSON 형식을 정확하게 지켜서 출력하세요. JSON 마크다운 기호(\`\`\`json) 없이 순수 JSON 중괄호만 출력하세요:
-{
-  "primaryEmotion": "joy | sadness | anger | anxiety | fatigue | calm 중 텍스트를 분석하여 가장 어울리는 대표 감정 단어 하나 선택",
-  "positivity": 0부터 100 사이의 긍정 지수 숫자 (행복할수록 높고 슬프거나 짜증날수록 낮음),
-  "keywords": ["일기 내용에서 추출한 대표 감정 키워드 3~5개"],
-  "aiResponse": "일기 작성자의 마음에 깊이 공감하고 위로와 격려를 건네주는 다정하고 따뜻한 위로의 편지 (존댓말 사용, 200자 내외)",
-  "recommendation": "감정 상태에 맞는 추천 힐링 활동이나 자기 관리 팁 가이드 (100자 내외)"
-}`;
+사용자 일기 내용:
+"${text}"`;
 
         const payload = {
             contents: [{
@@ -410,39 +425,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const data = await response.json();
-        const geminiText = data.candidates[0].content.parts[0].text;
+        const geminiText = data.candidates[0].content.parts[0].text.trim();
         
         try {
-            let cleanJsonText = geminiText.trim();
-            if (cleanJsonText.startsWith("```")) {
-                cleanJsonText = cleanJsonText.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+            // 1. 감정 단어 추출 (형식: "감정: [요약된 감정]" 또는 "감정 [요약된 감정]")
+            const emotionMatch = geminiText.match(/감정\s*:?\s*([^\n\r]+)/);
+            let emotionStr = "평온";
+            if (emotionMatch && emotionMatch[1]) {
+                emotionStr = emotionMatch[1].trim();
             }
             
-            const parsed = JSON.parse(cleanJsonText);
+            // 대괄호 제거 및 공백 클리닝
+            const cleanEmotionStr = emotionStr.replace(/[\[\]]/g, '').trim();
             
-            let emotion = parsed.primaryEmotion.toLowerCase().trim();
-            const validEmotions = ['joy', 'sadness', 'anger', 'anxiety', 'fatigue', 'calm'];
-            if (!validEmotions.includes(emotion)) {
-                const emoMap = {
-                    '행복': 'joy', '기쁨': 'joy',
-                    '슬픔': 'sadness', '우울': 'sadness',
-                    '화': 'anger', '분노': 'anger', '짜증': 'anger',
-                    '불안': 'anxiety', '걱정': 'anxiety',
-                    '무기력': 'fatigue', '피곤': 'fatigue',
-                    '평온': 'calm', '안정': 'calm'
-                };
-                emotion = emoMap[parsed.primaryEmotion] || 'calm';
-            }
-            
+            // 앱 내부 코드에 감정 매핑
+            let emotionKey = 'calm';
+            if (cleanEmotionStr.includes('기쁨') || cleanEmotionStr.includes('행복')) emotionKey = 'joy';
+            else if (cleanEmotionStr.includes('슬픔') || cleanEmotionStr.includes('우울')) emotionKey = 'sadness';
+            else if (cleanEmotionStr.includes('분노') || cleanEmotionStr.includes('화') || cleanEmotionStr.includes('짜증')) emotionKey = 'anger';
+            else if (cleanEmotionStr.includes('불안') || cleanEmotionStr.includes('걱정') || cleanEmotionStr.includes('초조')) emotionKey = 'anxiety';
+            else if (cleanEmotionStr.includes('무기력') || cleanEmotionStr.includes('피곤') || cleanEmotionStr.includes('지침')) emotionKey = 'fatigue';
+            else if (cleanEmotionStr.includes('평온') || cleanEmotionStr.includes('안정') || cleanEmotionStr.includes('편안')) emotionKey = 'calm';
+
+            // 2. 일상 차트/태그 무결성을 위한 로컬 분석 보완
+            const localAnalysis = performEmotionAnalysis(text);
+            const positivity = localAnalysis.positivity;
+            const keywords = localAnalysis.keywords;
+            const recommendation = localAnalysis.recommendation;
+
             return {
-                primaryEmotion: emotion,
-                positivity: Number(parsed.positivity) || 50,
-                keywords: Array.isArray(parsed.keywords) ? parsed.keywords : ['일기'],
-                aiResponse: parsed.aiResponse || '일기를 잘 읽었습니다. 힘내세요.',
-                recommendation: parsed.recommendation || '마음 편히 쉬어보세요.'
+                primaryEmotion: emotionKey,
+                positivity: positivity,
+                keywords: keywords,
+                aiResponse: geminiText, // 사용자의 요구에 부합하도록 API 원본 텍스트(줄바꿈 포함)를 회색 박스에 표시
+                recommendation: recommendation
             };
         } catch (parseError) {
-            console.error("Failed to parse Gemini response JSON. Raw text:", geminiText);
+            console.error("Failed to parse Gemini response text. Raw text:", geminiText);
             return null;
         }
     }
